@@ -19,7 +19,7 @@ type BrowserSpeechRecognition = {
   interimResults: boolean;
   lang: string;
   onresult: ((event: { resultIndex: number; results: { length: number; [index: number]: { isFinal: boolean; 0: { transcript: string } } } }) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
   start: () => void;
   stop: () => void;
 };
@@ -35,6 +35,28 @@ function formatTimer(seconds: number) {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+function getSupportedMimeType(): string {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/ogg;codecs=opus",
+    "audio/ogg",
+    "audio/mp4",
+  ];
+  for (const type of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(type)) {
+      return type;
+    }
+  }
+  return "";
+}
+
+function mimeToExtension(mimeType: string): string {
+  if (mimeType.includes("ogg")) return "ogg";
+  if (mimeType.includes("mp4")) return "mp4";
+  return "webm";
 }
 
 export default function PracticeRecorder({
@@ -58,13 +80,22 @@ export default function PracticeRecorder({
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const transcriptPartsRef = useRef<string[]>([]);
+  const elapsedRef = useRef(0);
+  const mimeTypeRef = useRef<string>("");
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
     setSpeechSupported(
       typeof window !== "undefined" &&
         ("SpeechRecognition" in window || "webkitSpeechRecognition" in window),
     );
-    fetchAiStatus().then((status) => setAiEnabled(status.configured));
+    fetchAiStatus().then((status) => {
+      if (mountedRef.current) setAiEnabled(status.configured);
+    });
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -81,15 +112,24 @@ export default function PracticeRecorder({
     setManualTranscript("");
     transcriptPartsRef.current = [];
     chunksRef.current = [];
+    elapsedRef.current = 0;
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mediaRecorder = new MediaRecorder(stream);
+
+      const mimeType = getSupportedMimeType();
+      mimeTypeRef.current = mimeType;
+      const mediaRecorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
       };
+
+      // Request data every second so chunks are populated even on short recordings
+      mediaRecorder.start(1000);
 
       if (speechSupported) {
         const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -103,17 +143,25 @@ export default function PracticeRecorder({
               const piece = event.results[i][0].transcript.trim();
               if (event.results[i].isFinal && piece) transcriptPartsRef.current.push(piece);
             }
-            setTranscript(transcriptPartsRef.current.join(" "));
+            if (mountedRef.current) setTranscript(transcriptPartsRef.current.join(" "));
+          };
+          // BUG FIX: handle recognition errors — was missing entirely in PracticeRecorder
+          recognition.onerror = (event) => {
+            if (event.error !== "no-speech" && event.error !== "aborted") {
+              setSpeechSupported(false);
+            }
           };
           recognitionRef.current = recognition;
           recognition.start();
         }
       }
 
-      mediaRecorder.start();
       setState("recording");
       setElapsed(0);
-      timerRef.current = window.setInterval(() => setElapsed((value) => value + 1), 1000);
+      timerRef.current = window.setInterval(() => {
+        elapsedRef.current += 1;
+        if (mountedRef.current) setElapsed(elapsedRef.current);
+      }, 1000);
     } catch {
       setState("error");
       setError("Microphone access is required.");
@@ -131,21 +179,27 @@ export default function PracticeRecorder({
     const recorder = mediaRecorderRef.current;
     if (!recorder) return;
 
+    const finalElapsed = elapsedRef.current;
+
     recorder.onstop = async () => {
       recorder.stream.getTracks().forEach((track) => track.stop());
-      await submitAssessmentRecording();
+      await submitAssessmentRecording(finalElapsed);
     };
     if (recorder.state !== "inactive") recorder.stop();
   }
 
-  async function submitAssessmentRecording() {
+  async function submitAssessmentRecording(finalElapsed: number) {
+    if (!mountedRef.current) return;
     setState("processing");
-    const finalTranscript = (transcript || manualTranscript).trim();
+
+    // Read from ref — avoids stale closure on transcript state
+    const finalTranscript = transcriptPartsRef.current.join(" ").trim() || manualTranscript.trim();
+
+    const mimeType = mimeTypeRef.current || "audio/webm";
+    const ext = mimeToExtension(mimeType);
     const audioBlob =
       chunksRef.current.length > 0
-        ? new Blob(chunksRef.current, {
-            type: mediaRecorderRef.current?.mimeType || "audio/webm",
-          })
+        ? new Blob(chunksRef.current, { type: mimeType })
         : null;
 
     if (!audioBlob && finalTranscript.length < 20) {
@@ -153,7 +207,7 @@ export default function PracticeRecorder({
       setError("Please capture at least 20 characters of speech.");
       return;
     }
-    if (elapsed < minSeconds) {
+    if (finalElapsed < minSeconds) {
       setState("error");
       setError(`Please record for at least ${minSeconds} seconds.`);
       return;
@@ -162,15 +216,20 @@ export default function PracticeRecorder({
     try {
       const data = await submitAssessment({
         topic,
-        durationSeconds: elapsed,
+        durationSeconds: finalElapsed,
         transcript: finalTranscript || undefined,
         audioBlob,
+        audioFilename: `recording.${ext}`,
       });
-      router.push(`/dashboard/assessment/${data.id}`);
-      router.refresh();
+      if (mountedRef.current) {
+        router.push(`/dashboard/assessment/${data.id}`);
+        router.refresh();
+      }
     } catch (submitError) {
-      setState("error");
-      setError(submitError instanceof Error ? submitError.message : "Analysis failed.");
+      if (mountedRef.current) {
+        setState("error");
+        setError(submitError instanceof Error ? submitError.message : "Analysis failed.");
+      }
     }
   }
 

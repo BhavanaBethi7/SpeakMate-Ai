@@ -3,6 +3,7 @@ type SubmitAssessmentInput = {
   durationSeconds: number;
   transcript?: string;
   audioBlob?: Blob | null;
+  audioFilename?: string; // BUG FIX: allow caller to pass correct filename/extension
 };
 
 export async function submitAssessment(input: SubmitAssessmentInput) {
@@ -11,7 +12,9 @@ export async function submitAssessment(input: SubmitAssessmentInput) {
   formData.append("durationSeconds", String(input.durationSeconds));
   if (input.transcript) formData.append("transcript", input.transcript);
   if (input.audioBlob && input.audioBlob.size > 0) {
-    formData.append("audio", input.audioBlob, "recording.webm");
+    // Use the provided filename (with correct extension) or fall back to webm
+    const filename = input.audioFilename ?? "recording.webm";
+    formData.append("audio", input.audioBlob, filename);
   }
 
   const response = await fetch("/api/assessments", {
