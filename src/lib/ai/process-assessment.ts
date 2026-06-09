@@ -18,23 +18,43 @@ export async function processSpeechAssessment(input: {
       transcript = await transcribeWithWhisper(input.audio);
       usedWhisper = true;
     } catch (error) {
-      console.error("Whisper transcription failed:", error);
-      if (!transcript) throw new Error("Could not transcribe your recording. Please try again.");
+      console.error("Whisper transcription failed, falling back to client transcript:", error);
+      // FIX: Don't throw — fall back to client transcript (from SpeechRecognition).
+      // Only hard-fail if we also have no client transcript at all.
+      if (!transcript) {
+        // Give a more helpful error that tells the user what actually went wrong
+        const message =
+          error instanceof Error && error.message?.includes("401")
+            ? "OpenAI API key is invalid. Please check your Vercel environment variables."
+            : error instanceof Error && error.message?.includes("429")
+            ? "OpenAI quota exceeded. Please check your billing at platform.openai.com."
+            : "Audio transcription failed. Please try recording again or check your microphone.";
+        throw new Error(message);
+      }
+      // We have a client transcript — silently continue without Whisper
     }
   }
 
   if (!transcript || transcript.length < 20) {
-    throw new Error("Please record at least 20 characters of speech for analysis.");
+    throw new Error(
+      "Not enough speech was captured. Please speak clearly for at least 15 seconds and try again.",
+    );
   }
 
+  // Try GPT-powered analysis; on failure fall back to local analysis
   if (isOpenAIConfigured()) {
-    const analysis = await runSpeechAnalysis(transcript, input.durationSeconds, input.topic);
-    return {
-      transcript,
-      analysis,
-      usedWhisper,
-      usedGPT: Boolean(analysis.aiPowered),
-    };
+    try {
+      const analysis = await runSpeechAnalysis(transcript, input.durationSeconds, input.topic);
+      return {
+        transcript,
+        analysis,
+        usedWhisper,
+        usedGPT: Boolean(analysis.aiPowered),
+      };
+    } catch (error) {
+      console.error("GPT analysis failed, using local analysis:", error);
+      // Fall through to local analysis below
+    }
   }
 
   return {
