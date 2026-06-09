@@ -1,15 +1,16 @@
 import OpenAI from "openai";
-import { isOpenAIConfigured } from "./config";
+import { getApiCredentials, isOpenAIConfigured } from "./config";
 
 let client: OpenAI | null = null;
 
 export function getOpenAIClient() {
   if (!isOpenAIConfigured()) {
-    throw new Error("OPENAI_API_KEY is not configured.");
+    throw new Error("No AI API key configured. Set GROQ_API_KEY in your environment variables.");
   }
 
   if (!client) {
-    client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const { apiKey, baseURL } = getApiCredentials();
+    client = new OpenAI({ apiKey, ...(baseURL ? { baseURL } : {}) });
   }
 
   return client;
