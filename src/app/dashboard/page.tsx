@@ -7,7 +7,7 @@ import { parseAssessmentScores } from "@/lib/speech-analysis";
 import { ensureUserProgress } from "@/lib/session-user";
 import { getUserGamificationStats } from "@/lib/user-progress";
 import { prisma } from "@/lib/prisma";
-import { getServerSession } from "next-auth/next";
+import { getServerSession } from "next-auth";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
@@ -25,7 +25,7 @@ function formatDisplayName(raw: string | null | undefined, email: string | null 
 
 export default async function DashboardPage() {
   // FIX 3: use proper typed session, not `as any` cast at usage site
-  const session = await getServerSession(authOptions as Parameters<typeof getServerSession>[0]);
+  const session = await getServerSession(authOptions);
   const typedSession = session as { user?: { name?: string | null; email?: string | null; image?: string | null } } | null;
 
   if (!typedSession?.user?.email) redirect("/signin");
