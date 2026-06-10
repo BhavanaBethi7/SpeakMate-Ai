@@ -65,8 +65,16 @@ export default function ProgressCharts({ history, confidenceGrowth, fluencyGrowt
             {/* Reference line at 70 — "competent speaker" threshold */}
             <ReferenceLine y={70} stroke="#e2e8f0" strokeDasharray="4 4" label={{ value: "Target", position: "insideTopRight", fill: "#cbd5e1", fontSize: 10 }} />
             <Tooltip
-              contentStyle={{ borderRadius: "12px", border: "1px solid #e2e8f0", fontSize: 12, boxShadow: "0 4px 12px rgba(15,23,42,0.08)" }}
-              formatter={(value: number, name: string) => [`${value}/100`, name.charAt(0).toUpperCase() + name.slice(1)]}
+              contentStyle={{
+                borderRadius: "12px",
+                border: "1px solid #e2e8f0",
+                fontSize: 12,
+                boxShadow: "0 4px 12px rgba(15,23,42,0.08)",
+              }}
+              formatter={(value, name) => [
+                `${Number(value ?? 0)}/100`,
+                String(name).charAt(0).toUpperCase() + String(name).slice(1),
+              ]}
             />
             <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
             <Line type="monotone" dataKey="confidence" name="Confidence" stroke="#0ea5e9" strokeWidth={2.5} dot={{ r: 4, fill: "#0ea5e9", strokeWidth: 0 }} activeDot={{ r: 6 }} />
